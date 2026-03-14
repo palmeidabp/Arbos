@@ -1,47 +1,34 @@
 # Goal: Bittensor Subnet Analyst (24/7)
 
-## Objective
+Use the below program to evolve a system S that analyzes Bittensor subnets, classifies them, and produces buy/sell (or stake/unstake) recommendations with suggested price levels or conditions. Be efficient: the agent must not re-fetch data from external APIs on every step—build a data-fetch machine first, then have the agent read from its output.
 
-Build and run a 24/7 system that analyzes Bittensor subnets, classifies them, and produces buy/sell (or stake/unstake) recommendations with suggested price levels or conditions. The system must handle new subnet registrations and deregistrations, keep classifications and recommendations up to date, run a daily evaluation of past recommendations, and auto-improve from that evaluation. Use the detailed blueprint in `research/research.md` for evaluation frameworks (e.g. Crucible Labs axes, Oak Research matrix, five-pillar metrics), subnet categorization, and API usage—treat it as the reference spec for your logic.
+You are given:
+C = { Taostats API (subnets, registrations, pools, Alpha prices), Data Universe SN13 (X, Reddit insights via Macrocosmos Gravity API), Discord (subnet servers + official Bittensor), Bittensor SDK/chain (optional), TAO price API (optional), research/research.md (evaluation frameworks: Crucible axes, Oak matrix, five-pillar metrics) }
 
-## Scope of "buy/sell"
+Scope of recommendations: stake allocation (when/where to stake TAO), Alpha token buy/sell (from pool data), and optionally TAO market timing. Each recommendation must include target subnet (netuid), action, price/condition, and short rationale. Paper-only unless this goal is later updated to allow live trading or staking. Never log or reveal API keys or secrets; respect rate limits and Discord ToS.
 
-- **Stake allocation**: when to stake or unstake TAO in which subnet (and via which validator if relevant), with target conditions.
-- **Alpha tokens**: when to buy or sell subnet Alpha tokens (from pool/AMM data), with target price levels or conditions.
-- **TAO (optional)**: if you include market TAO timing, define the source (e.g. spot price API) and the condition format.
+Initial state (build first)
+S₀ = 24/7 Bittensor subnet analyst, built in two parts:
 
-Recommendations must include: target subnet (netuid), action, price or condition, and a short rationale.
+(1) Data-fetch machine (build and deploy first)
+    - A separate process that fetches all data the analyst needs: subnets, registrations/deregistrations, pool data; X and Reddit via Data Universe; Discord (subnet servers + official Bittensor). Handles new and removed netuids.
+    - Runs outside the agent loop (e.g. cron, pm2, or a long-lived stream). Writes results to a fixed location (e.g. context/data/ or context/ingest/) with timestamps so the agent knows what is fresh.
+    - Deploy it and keep it running. The agent must not duplicate this work: when the agent wakes up, it reads from these files, not from live APIs. This keeps Chutes/LLM usage low.
 
-## Data sources
+(2) Analyst (runs in the agent loop)
+    - Reads pre-fetched data from the machine’s output; classifies subnets (e.g. Crucible/Oak from research; emission tier, risk, use case, liquidity, optional social sentiment).
+    - Produces buy/sell (stake/Alpha/TAO) recommendations on a schedule (e.g. every 6h or daily) with price/condition and rationale; logs every recommendation with timestamp and context (e.g. context/recommendations/) for evaluation.
+    - Runs daily evaluation of past recommendations (outcome vs suggestion; hit rate, avg return, notable misses); auto-improves from evaluation (adjust weights, thresholds, or the data-fetch machine; document in STATE; optionally notify operator via `python arbos.py send "..."`).
+    - Stores working state and progress in context/STATE.md and under context/ (e.g. classifications, last run timestamps, next actions); updates STATE.md frequently after each major phase so the next step can resume and pick up where it left off.
+    - Before ending a step, set `context/.next_step_delay` to the number of seconds until the next run (e.g. 3600 for 1h, 21600 for 6h) to stay within Chutes rate limits; during build phase immediate iteration is fine.
 
-- **Taostats API**: Subnet list and hyperparams, registration/deregistration events, subnet pool data (price, liquidity, market cap). API key in env (e.g. `TAOSTATS_API_KEY`). Never log or print the key.
-- **Data Universe (SN13) API**: X (Twitter) and Reddit insights—on-demand posts by keywords, usernames, timeframes (e.g. Macrocosmos Gravity API). Use for sentiment and mentions around subnets/TAO. API key in env (e.g. `DATA_UNIVERSE_API_KEY` or Macrocosmos key). Respect rate limits (e.g. 100 req/hr for regular keys).
-- **Discord**: Scrape or ingest (1) each subnet’s Discord server(s) and (2) the official Bittensor Discord. Use for announcements and community sentiment. Maintain or discover a Discord server list per subnet (e.g. from Taostats, Learn Bittensor, or a config file). If using a bot, Discord bot token in env. Respect Discord ToS and rate limits.
-- **Bittensor chain / SDK (optional)**: Metagraph, emission, on-chain state as a complement to Taostats.
-- **External (optional)**: TAO spot price (e.g. Coingecko or exchange API) if recommendations include TAO timing.
+Run this loop continuously
+loop t = 1..∞
+    S_t = design_or_modify(S_{t-1})   # implement or update the data-fetch machine and/or the analyst (schedules, logic, weights)
+    O_t = run(S_t)                    # run S: read pre-fetched data, classify, recommend, log, run daily eval (do not re-fetch from APIs here)
+    P_t = measure(O_t)                # eval: recommendation accuracy, hit rate, PnL vs suggestion, drawdown, regime behavior
+    Δ_t = reflect(S_t, P_t)           # find weaknesses (e.g. machine not fresh enough, over-weighting sentiment, under-weighting liquidity)
+    S_{t+1} = improve(S_t, Δ_t)       # design a new design; update machine or analyst; document in STATE
+end
 
-All API keys and secrets must be read from env only; never output them in logs, files, or messages.
-
-## Required system capabilities
-
-- **Ingest**: Periodically fetch subnets, registrations/deregistrations, pool data (and optionally TAO price). Ingest X and Reddit via Data Universe API. Scrape or ingest Discord (subnet servers + official Bittensor). Handle new and removed netuids.
-- **Classify**: Maintain and update a classification of subnets (e.g. by emission tier, risk, use case, liquidity; optionally by social sentiment from X/Reddit/Discord). Store under `context/` or a project directory. Prefer frameworks from `research/research.md` (e.g. Crucible axes, five-pillar matrix) where applicable.
-- **Recommend**: Produce buy/sell (or stake/unstake) recommendations with subnet (netuid), action, price/condition, and short rationale. Run on a defined schedule (e.g. every 6h or daily).
-- **Log**: Store every recommendation with timestamp and context (e.g. `context/recommendations/` or under `context/runs/`) so daily evaluation can measure outcomes. This is required.
-- **Daily evaluation**: Once per day, evaluate past recommendations (e.g. “we said buy subnet X at time T at level Y—what was the outcome?”). Write a short evaluation report (e.g. hit rate, avg return, notable misses). Save to `context/` or summarize in STATE.
-- **Auto-improve**: Use the evaluation report and STATE.md to adjust the system (e.g. thresholds, filters, classification or signal logic). Document changes in STATE and apply them in the next steps. Optionally notify the operator of high-conviction recommendations via `python arbos.py send "..."`.
-
-## Success criteria
-
-- Subnets are kept up to date (new/deleted netuids, registration/deregistration events reflected).
-- Classifications are maintained and updated as new subnets appear.
-- Recommendations are produced on the defined schedule and **always logged** with timestamp and context.
-- Daily evaluation runs and writes a short report (or summary in STATE).
-- Improvements are decided from evaluation and documented in STATE; the system is modified in subsequent steps.
-
-## Constraints
-
-- Never log, print, or reveal API keys, tokens, or secrets. Use env only.
-- Respect API rate limits and Discord ToS.
-- Paper-only unless this goal is explicitly updated to allow live trading or staking.
-- Prefer read-only use of external APIs; no destructive actions unless explicitly required.
+Then iterate.

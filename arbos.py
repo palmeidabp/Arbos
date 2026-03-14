@@ -34,6 +34,7 @@ RUNS_DIR = CONTEXT_DIR / "runs"
 CHATLOG_DIR = CONTEXT_DIR / "chat"
 RESTART_FLAG = WORKING_DIR / ".restart"
 STEP_MSG_FILE = CONTEXT_DIR / ".step_msg"
+NEXT_STEP_DELAY_FILE = CONTEXT_DIR / ".next_step_delay"
 CHAT_ID_FILE = WORKING_DIR / "chat_id.txt"
 ENV_ENC_FILE = WORKING_DIR / ".env.enc"
 
@@ -1378,6 +1379,16 @@ def agent_loop():
 
         if success:
             failures = 0
+            # Agent-controlled delay: wait if context/.next_step_delay contains seconds (0–24h)
+            if NEXT_STEP_DELAY_FILE.exists():
+                try:
+                    delay_sec = int(NEXT_STEP_DELAY_FILE.read_text().strip())
+                    if 0 <= delay_sec <= 86400:
+                        _log(f"waiting {delay_sec}s before next step (agent-requested)")
+                        _agent_wake.wait(timeout=delay_sec)
+                except (ValueError, OSError):
+                    pass
+                NEXT_STEP_DELAY_FILE.unlink(missing_ok=True)
         else:
             failures += 1
             _log(f"failure #{failures}")
